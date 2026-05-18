@@ -13,6 +13,7 @@ import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
+import { OfficeTools } from "./office"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -133,6 +134,7 @@ export const layer: Layer.Layer<
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
+    const office = process.platform === "win32" ? yield* Effect.all(OfficeTools) : []
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -238,6 +240,7 @@ export const layer: Layer.Layer<
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
         })
+        const officeTools = yield* Effect.all(office.map((item) => Tool.init(item)))
 
         return {
           custom,
@@ -258,6 +261,7 @@ export const layer: Layer.Layer<
             ...(flags.experimentalScout ? [tool.repo_clone, tool.repo_overview] : []),
             tool.skill,
             tool.patch,
+            ...officeTools,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],

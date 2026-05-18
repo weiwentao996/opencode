@@ -131,6 +131,43 @@ const put = Effect.fn("ReadToolTest.put")(function* (p: string, content: string 
   const fs = yield* AppFileSystem.Service
   yield* fs.writeWithDirs(p, content)
 })
+const pdfFixture = (pageCount: number) => {
+  const objects: string[] = []
+  const pageRefs: string[] = []
+
+  const add = (body: string) => {
+    objects.push(body)
+    return objects.length
+  }
+
+  const catalog = add("<< /Type /Catalog /Pages 2 0 R >>")
+  const pages = add("")
+  for (let page = 1; page <= pageCount; page++) {
+    const content = `0.${page} 0.${page} 0.${page} rg 10 10 180 180 re f`
+    const contentObject = add(`<< /Length ${Buffer.byteLength(content, "ascii")} >>\nstream\n${content}\nendstream`)
+    const pageObject = add(
+      `<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents ${contentObject} 0 R >>`,
+    )
+    pageRefs.push(`${pageObject} 0 R`)
+  }
+  objects[pages - 1] = `<< /Type /Pages /Kids [${pageRefs.join(" ")}] /Count ${pageCount} >>`
+
+  let pdf = "%PDF-1.4\n"
+  const offsets = [0]
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.byteLength(pdf, "ascii"))
+    pdf += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`
+  }
+
+  const xref = Buffer.byteLength(pdf, "ascii")
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  pdf += offsets
+    .slice(1)
+    .map((offset) => `${String(offset).padStart(10, "0")} 00000 n `)
+    .join("\n")
+  pdf += `\ntrailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  return Buffer.from(pdf, "ascii")
+}
 const load = Effect.fn("ReadToolTest.load")(function* (p: string) {
   const fs = yield* AppFileSystem.Service
   return yield* fs.readFileString(p)
@@ -485,6 +522,7 @@ describe("tool.read truncation", () => {
       expect(result.metadata.truncated).toBe(false)
       expect(result.attachments).toBeDefined()
       expect(result.attachments?.length).toBe(1)
+      expect(result.attachments?.[0].filename).toBe("image.png")
       expect(result.attachments?.[0]).not.toHaveProperty("id")
       expect(result.attachments?.[0]).not.toHaveProperty("sessionID")
       expect(result.attachments?.[0]).not.toHaveProperty("messageID")
@@ -500,6 +538,7 @@ describe("tool.read truncation", () => {
       const result = yield* exec(dir, { filePath: path.join(dir, "image.bin") })
       expect(result.output).toBe("Image read successfully")
       expect(result.attachments?.[0].mime).toBe("image/jpeg")
+      expect(result.attachments?.[0].filename).toBe("image.bin")
       expect(result.attachments?.[0].url.startsWith("data:image/jpeg;base64,")).toBe(true)
     }),
   )
@@ -511,9 +550,54 @@ describe("tool.read truncation", () => {
       expect(result.attachments).toBeDefined()
       expect(result.attachments?.length).toBe(1)
       expect(result.attachments?.[0].type).toBe("file")
+      expect(result.attachments?.[0].filename).toBe("large-image.png")
       expect(result.attachments?.[0]).not.toHaveProperty("id")
       expect(result.attachments?.[0]).not.toHaveProperty("sessionID")
       expect(result.attachments?.[0]).not.toHaveProperty("messageID")
+    }),
+  )
+
+  it.live("PDF files render to page image attachments", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      yield* put(path.join(dir, "sample.pdf"), pdfFixture(1))
+
+      const result = yield* exec(dir, { filePath: path.join(dir, "sample.pdf") })
+      expect(result.output).toContain("PDF rendered successfully")
+      expect(result.metadata.truncated).toBe(false)
+      expect(result.attachments?.length).toBe(1)
+      expect(result.attachments?.[0].type).toBe("file")
+      expect(result.attachments?.[0].mime).toBe("image/png")
+      expect(result.attachments?.[0].filename).toBe("sample-page-1.png")
+      expect(result.attachments?.[0].url.startsWith("data:image/png;base64,")).toBe(true)
+      expect(result.attachments?.[0]).not.toHaveProperty("id")
+      expect(result.attachments?.[0]).not.toHaveProperty("sessionID")
+      expect(result.attachments?.[0]).not.toHaveProperty("messageID")
+    }),
+  )
+
+  it.live("PDF rendering honors offset and limit", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      yield* put(path.join(dir, "multi.pdf"), pdfFixture(3))
+
+      const result = yield* exec(dir, { filePath: path.join(dir, "multi.pdf"), offset: 2, limit: 1 })
+      expect(result.output).toContain("Rendered page 2 of 3")
+      expect(result.output).toContain("Use offset=3 to continue")
+      expect(result.metadata.truncated).toBe(true)
+      expect(result.attachments?.length).toBe(1)
+      expect(result.attachments?.[0].mime).toBe("image/png")
+      expect(result.attachments?.[0].filename).toBe("multi-page-2.png")
+    }),
+  )
+
+  it.live("PDF rendering fails when offset is beyond the page count", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      yield* put(path.join(dir, "short.pdf"), pdfFixture(1))
+
+      const err = yield* fail(dir, { filePath: path.join(dir, "short.pdf"), offset: 2 })
+      expect(err.message).toContain("Offset 2 is out of range for this PDF (1 pages)")
     }),
   )
 

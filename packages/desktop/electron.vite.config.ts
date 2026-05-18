@@ -60,7 +60,7 @@ export default defineConfig({
         name: "opencode:copy-server-assets",
         async writeBundle() {
           for (const l of await fs.readdir(OPENCODE_SERVER_DIST)) {
-            if (!l.endsWith(".wasm")) continue
+            if (!l.endsWith(".wasm") && !l.endsWith(".node")) continue
             await fs.writeFile(`./out/main/chunks/${l}`, await fs.readFile(`${OPENCODE_SERVER_DIST}/${l}`))
           }
         },

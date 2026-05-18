@@ -10,6 +10,7 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { Reference } from "@/reference/reference"
+import { DEFAULT_PDF_PAGE_LIMIT, MAX_PDF_PAGE_LIMIT, renderPdfPages } from "@/pdf/render"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -27,10 +28,10 @@ const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "
 export const Parameters = Schema.Struct({
   filePath: Schema.String.annotate({ description: "The absolute path to the file or directory to read" }),
   offset: Schema.optional(NonNegativeInt).annotate({
-    description: "The line number to start reading from (1-indexed)",
+    description: "The line number, directory entry, or PDF page number to start reading from (1-indexed)",
   }),
   limit: Schema.optional(NonNegativeInt).annotate({
-    description: "The maximum number of lines to read (defaults to 2000)",
+    description: "The maximum number of lines, directory entries, or PDF pages to read or render",
   }),
 })
 
@@ -263,9 +264,9 @@ export const ReadTool = Tool.define(
       const mime = sniffAttachmentMime(sample, AppFileSystem.mimeType(filepath))
       const isImage = SUPPORTED_IMAGE_MIMES.has(mime)
 
-      if (isImage || isPdfAttachment(mime)) {
+      if (isImage) {
         const bytes = yield* fs.readFile(filepath)
-        const msg = isPdfAttachment(mime) ? "PDF read successfully" : "Image read successfully"
+        const msg = "Image read successfully"
         return {
           title,
           output: msg,
@@ -278,9 +279,44 @@ export const ReadTool = Tool.define(
             {
               type: "file" as const,
               mime,
+              filename: path.basename(filepath),
               url: `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`,
             },
           ],
+        }
+      }
+
+      if (isPdfAttachment(mime)) {
+        const bytes = yield* fs.readFile(filepath)
+        const rendered = yield* renderPdfPages({
+          data: bytes,
+          filename: path.basename(filepath),
+          offset: params.offset || 1,
+          limit: params.limit ?? DEFAULT_PDF_PAGE_LIMIT,
+        })
+        const firstPage = rendered.pages[0]!.page
+        const lastPage = rendered.pages[rendered.pages.length - 1]!.page
+        const capped = (params.limit ?? DEFAULT_PDF_PAGE_LIMIT) > MAX_PDF_PAGE_LIMIT
+        const next = rendered.nextOffset ? ` Use offset=${rendered.nextOffset} to continue.` : ""
+        const cap = capped ? ` Requested limit was capped to ${MAX_PDF_PAGE_LIMIT} pages.` : ""
+        const pageRange = firstPage === lastPage ? `page ${firstPage}` : `pages ${firstPage}-${lastPage}`
+        const msg = `PDF rendered successfully. Rendered ${pageRange} of ${rendered.totalPages} as images for vision analysis.${next}${cap}`
+        const basename = path.basename(filepath, path.extname(filepath))
+
+        return {
+          title,
+          output: msg,
+          metadata: {
+            preview: msg,
+            truncated: rendered.truncated,
+            loaded: loaded.map((item) => item.filepath),
+          },
+          attachments: rendered.pages.map((page) => ({
+            type: "file" as const,
+            mime: page.mime,
+            filename: `${basename}-page-${page.page}.png`,
+            url: `data:${page.mime};base64,${Buffer.from(page.bytes).toString("base64")}`,
+          })),
         }
       }
 

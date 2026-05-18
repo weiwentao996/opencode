@@ -10,6 +10,7 @@ import {
   type CacheHint,
   type FinishReason,
   type LLMRequest,
+  type MediaPart,
   type ProviderMetadata,
   type ToolCallPart,
   type ToolDefinition,
@@ -92,7 +93,29 @@ const AnthropicToolResultBlock = Schema.Struct({
   cache_control: Schema.optional(AnthropicCacheControl),
 })
 
-const AnthropicUserBlock = Schema.Union([AnthropicTextBlock, AnthropicToolResultBlock])
+const AnthropicBase64Source = Schema.Struct({
+  type: Schema.Literal("base64"),
+  media_type: Schema.String,
+  data: Schema.String,
+})
+
+const AnthropicImageBlock = Schema.Struct({
+  type: Schema.tag("image"),
+  source: AnthropicBase64Source,
+})
+
+const AnthropicDocumentBlock = Schema.Struct({
+  type: Schema.tag("document"),
+  source: AnthropicBase64Source,
+  title: Schema.optional(Schema.String),
+})
+
+const AnthropicUserBlock = Schema.Union([
+  AnthropicTextBlock,
+  AnthropicToolResultBlock,
+  AnthropicImageBlock,
+  AnthropicDocumentBlock,
+])
 const AnthropicAssistantBlock = Schema.Union([
   AnthropicTextBlock,
   AnthropicThinkingBlock,
@@ -101,7 +124,9 @@ const AnthropicAssistantBlock = Schema.Union([
   AnthropicServerToolResultBlock,
 ])
 type AnthropicAssistantBlock = Schema.Schema.Type<typeof AnthropicAssistantBlock>
+type AnthropicMediaBlock = Schema.Schema.Type<typeof AnthropicImageBlock> | Schema.Schema.Type<typeof AnthropicDocumentBlock>
 type AnthropicToolResultBlock = Schema.Schema.Type<typeof AnthropicToolResultBlock>
+type AnthropicUserBlock = Schema.Schema.Type<typeof AnthropicUserBlock>
 
 const AnthropicMessage = Schema.Union([
   Schema.Struct({ role: Schema.Literal("user"), content: Schema.Array(AnthropicUserBlock) }),
@@ -272,6 +297,38 @@ const lowerServerToolResult = Effect.fn("AnthropicMessages.lowerServerToolResult
   return { type: wireType, tool_use_id: part.id, content: part.result.value } satisfies AnthropicServerToolResultBlock
 })
 
+const ANTHROPIC_IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
+
+const normalizeImageMediaType = (mediaType: string) => {
+  const normalized = mediaType.toLowerCase()
+  if (normalized === "image/jpg") return "image/jpeg"
+  if (ANTHROPIC_IMAGE_MEDIA_TYPES.has(normalized)) return normalized
+  return undefined
+}
+
+const lowerMedia = Effect.fn("AnthropicMessages.lowerMedia")(function* (part: MediaPart) {
+  const imageMediaType = normalizeImageMediaType(part.mediaType)
+  if (imageMediaType) {
+    return {
+      type: "image" as const,
+      source: { type: "base64" as const, media_type: imageMediaType, data: ProviderShared.mediaBytes(part) },
+    }
+  }
+
+  if (part.mediaType.toLowerCase() === "application/pdf") {
+    return {
+      type: "document" as const,
+      source: { type: "base64" as const, media_type: "application/pdf", data: ProviderShared.mediaBytes(part) },
+      ...(part.filename ? { title: part.filename } : {}),
+    }
+  }
+
+  if (part.mediaType.toLowerCase().startsWith("image/")) {
+    return yield* invalid(`Anthropic Messages does not support image media type ${part.mediaType}`)
+  }
+  return yield* invalid(`Anthropic Messages does not support media type ${part.mediaType}`)
+})
+
 const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
   request: LLMRequest,
   breakpoints: Cache.Breakpoints,
@@ -280,11 +337,15 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
 
   for (const message of request.messages) {
     if (message.role === "user") {
-      const content: AnthropicTextBlock[] = []
+      const content: AnthropicUserBlock[] = []
       for (const part of message.content) {
-        if (!ProviderShared.supportsContent(part, ["text"]))
-          return yield* ProviderShared.unsupportedContent("Anthropic Messages", "user", ["text"])
-        content.push({ type: "text", text: part.text, cache_control: cacheControl(breakpoints, part.cache) })
+        if (!ProviderShared.supportsContent(part, ["text", "media"]))
+          return yield* ProviderShared.unsupportedContent("Anthropic Messages", "user", ["text", "media"])
+        if (part.type === "text") {
+          content.push({ type: "text", text: part.text, cache_control: cacheControl(breakpoints, part.cache) })
+          continue
+        }
+        content.push(yield* lowerMedia(part))
       }
       messages.push({ role: "user", content })
       continue

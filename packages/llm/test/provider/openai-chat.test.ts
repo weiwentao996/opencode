@@ -52,6 +52,32 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("prepares OpenAI Chat image input", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.user([
+              { type: "text", text: "Describe this image." },
+              { type: "media", mediaType: "image/png", data: "AAECAw==", filename: "image.png" },
+            ]),
+          ],
+        }),
+      )
+
+      expect(prepared.body.messages).toEqual([
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this image." },
+            { type: "image_url", image_url: { url: "data:image/png;base64,AAECAw==" } },
+          ],
+        },
+      ])
+    }),
+  )
+
   it.effect("maps OpenAI provider options to Chat options", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
@@ -185,11 +211,11 @@ describe("OpenAI Chat route", () => {
         LLM.request({
           id: "req_media",
           model,
-          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+          messages: [Message.user({ type: "media", mediaType: "application/pdf", data: "AAECAw==" })],
         }),
       ).pipe(Effect.flip)
 
-      expect(error.message).toContain("OpenAI Chat user messages only support text content for now")
+      expect(error.message).toContain("OpenAI Chat does not support media type application/pdf")
     }),
   )
 

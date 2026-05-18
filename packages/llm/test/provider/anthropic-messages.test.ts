@@ -394,17 +394,83 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
+  it.effect("lowers user image media content", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          id: "req_image_media",
+          model,
+          messages: [
+            Message.user([
+              { type: "text", text: "Describe this image." },
+              { type: "media", mediaType: "image/jpg", data: "AAECAw==", filename: "image.jpg" },
+            ]),
+          ],
+        }),
+      )
+
+      expect(prepared.body).toMatchObject({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Describe this image." },
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/jpeg", data: "AAECAw==" },
+              },
+            ],
+          },
+        ],
+      })
+    }),
+  )
+
+  it.effect("lowers PDF media content with byte data", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          id: "req_pdf_media",
+          model,
+          messages: [
+            Message.user({
+              type: "media",
+              mediaType: "application/pdf",
+              data: new Uint8Array([1, 2, 3]),
+              filename: "doc.pdf",
+            }),
+          ],
+        }),
+      )
+
+      expect(prepared.body).toMatchObject({
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "document",
+                title: "doc.pdf",
+                source: { type: "base64", media_type: "application/pdf", data: "AQID" },
+              },
+            ],
+          },
+        ],
+      })
+    }),
+  )
+
   it.effect("rejects unsupported user media content", () =>
     Effect.gen(function* () {
       const error = yield* LLMClient.prepare(
         LLM.request({
           id: "req_media",
           model,
-          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+          messages: [Message.user({ type: "media", mediaType: "image/svg+xml", data: "AAECAw==" })],
         }),
       ).pipe(Effect.flip)
 
-      expect(error.message).toContain("Anthropic Messages user messages only support text content for now")
+      expect(error.message).toContain("Anthropic Messages does not support image media type image/svg+xml")
     }),
   )
 

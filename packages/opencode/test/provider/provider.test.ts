@@ -300,6 +300,85 @@ test("custom model alias via config", async () => {
   })
 })
 
+test("custom OpenAI GPT model infers image input without modalities", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            "custom-openai": {
+              name: "Custom OpenAI",
+              npm: "@ai-sdk/openai",
+              api: "https://api.custom.com/v1",
+              models: {
+                "gpt-5.5": {
+                  name: "GPT-5.5",
+                  limit: {
+                    context: 200000,
+                    output: 4096,
+                  },
+                },
+              },
+              options: {
+                apiKey: "custom-key",
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const model = await getModel(ProviderID.make("custom-openai"), ModelID.make("gpt-5.5"))
+      expect(model.capabilities.input.image).toBe(true)
+    },
+  })
+})
+
+test("custom Anthropic Claude model infers image input without modalities", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            "custom-anthropic": {
+              name: "Custom Anthropic",
+              npm: "@ai-sdk/anthropic",
+              api: "https://api.custom.com/v1",
+              models: {
+                "claude-sonnet-4-6": {
+                  name: "Claude Sonnet 4.6",
+                  limit: {
+                    context: 200000,
+                    output: 4096,
+                  },
+                },
+              },
+              options: {
+                apiKey: "custom-key",
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const model = await getModel(ProviderID.make("custom-anthropic"), ModelID.make("claude-sonnet-4-6"))
+      expect(model.capabilities.input.image).toBe(true)
+      expect(model.capabilities.input.pdf).toBe(true)
+    },
+  })
+})
+
 test("custom provider with npm package", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

@@ -10,6 +10,7 @@ import {
   Usage,
   type FinishReason,
   type LLMRequest,
+  type MediaPart,
   type ProviderMetadata,
   type TextPart,
   type ToolCallPart,
@@ -32,6 +33,14 @@ const OpenAIResponsesInputText = Schema.Struct({
   text: Schema.String,
 })
 
+const OpenAIResponsesInputImage = Schema.Struct({
+  type: Schema.tag("input_image"),
+  image_url: Schema.String,
+})
+
+const OpenAIResponsesInputContent = Schema.Union([OpenAIResponsesInputText, OpenAIResponsesInputImage])
+type OpenAIResponsesInputContent = Schema.Schema.Type<typeof OpenAIResponsesInputContent>
+
 const OpenAIResponsesOutputText = Schema.Struct({
   type: Schema.tag("output_text"),
   text: Schema.String,
@@ -39,7 +48,7 @@ const OpenAIResponsesOutputText = Schema.Struct({
 
 const OpenAIResponsesInputItem = Schema.Union([
   Schema.Struct({ role: Schema.tag("system"), content: Schema.String }),
-  Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputText) }),
+  Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputContent) }),
   Schema.Struct({ role: Schema.tag("assistant"), content: Schema.Array(OpenAIResponsesOutputText) }),
   Schema.Struct({
     type: Schema.tag("function_call"),
@@ -196,6 +205,17 @@ const lowerToolCall = (part: ToolCallPart): OpenAIResponsesInputItem => ({
   arguments: ProviderShared.encodeJson(part.input),
 })
 
+const openAIImageDataURL = Effect.fn("OpenAIResponses.openAIImageDataURL")(function* (part: MediaPart) {
+  const mediaType = part.mediaType.toLowerCase()
+  if (!mediaType.startsWith("image/")) return yield* invalid(`OpenAI Responses does not support media type ${part.mediaType}`)
+  return `data:${mediaType};base64,${ProviderShared.mediaBytes(part)}`
+})
+
+const lowerUserPart = Effect.fn("OpenAIResponses.lowerUserPart")(function* (part: TextPart | MediaPart) {
+  if (part.type === "text") return { type: "input_text" as const, text: part.text }
+  return { type: "input_image" as const, image_url: yield* openAIImageDataURL(part) }
+})
+
 const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest) {
   const system: OpenAIResponsesInputItem[] =
     request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
@@ -203,13 +223,13 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 
   for (const message of request.messages) {
     if (message.role === "user") {
-      const content: TextPart[] = []
+      const content: OpenAIResponsesInputContent[] = []
       for (const part of message.content) {
-        if (!ProviderShared.supportsContent(part, ["text"]))
-          return yield* ProviderShared.unsupportedContent("OpenAI Responses", "user", ["text"])
-        content.push(part)
+        if (!ProviderShared.supportsContent(part, ["text", "media"]))
+          return yield* ProviderShared.unsupportedContent("OpenAI Responses", "user", ["text", "media"])
+        content.push(yield* lowerUserPart(part))
       }
-      input.push({ role: "user", content: content.map((part) => ({ type: "input_text", text: part.text })) })
+      input.push({ role: "user", content })
       continue
     }
 

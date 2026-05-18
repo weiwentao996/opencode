@@ -1043,7 +1043,42 @@ function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
   return result
 }
 
+function inferredMultimodalInput(input: { providerID: string; apiNpm: string; apiID: string; modelID: string; name?: string }) {
+  const haystack = [input.providerID, input.apiNpm, input.apiID, input.modelID, input.name ?? ""].join(" ").toLowerCase()
+  const isAnthropic = input.apiNpm === "@ai-sdk/anthropic" || haystack.includes("anthropic")
+  if (isAnthropic) {
+    return {
+      image: /claude-(3|3[.-]5|3[.-]7|sonnet-4|opus-4|haiku-4|4)/.test(haystack),
+      pdf: /claude-(3[.-]5|3[.-]7|sonnet-4|opus-4|haiku-4|4)/.test(haystack),
+    }
+  }
+
+  const isOpenAI =
+    input.apiNpm === "@ai-sdk/openai" ||
+    input.apiNpm === "@ai-sdk/openai-compatible" ||
+    haystack.includes("openai") ||
+    haystack.includes("openrouter")
+  if (isOpenAI) {
+    return {
+      image: /\b(gpt-4o|gpt-4[.-]1|gpt-5|gpt-5[.-]5|o3|o4)\b/.test(haystack),
+      pdf: false,
+    }
+  }
+
+  return { image: false, pdf: false }
+}
+
 function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
+  const apiNpm = model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible"
+  const inferredInput = inferredMultimodalInput({
+    providerID: provider.id,
+    apiNpm,
+    apiID: model.id,
+    modelID: model.id,
+    name: model.name,
+  })
+  const imageInput = model.modalities?.input?.includes("image") ?? inferredInput.image
+  const pdfInput = model.modalities?.input?.includes("pdf") ?? inferredInput.pdf
   const base: Model = {
     id: ModelID.make(model.id),
     providerID: ProviderID.make(provider.id),
@@ -1052,7 +1087,7 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
     api: {
       id: model.id,
       url: model.provider?.api ?? provider.api ?? "",
-      npm: model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible",
+      npm: apiNpm,
     },
     status: model.status ?? "active",
     headers: {},
@@ -1071,9 +1106,9 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
       input: {
         text: model.modalities?.input?.includes("text") ?? false,
         audio: model.modalities?.input?.includes("audio") ?? false,
-        image: model.modalities?.input?.includes("image") ?? false,
+        image: imageInput,
         video: model.modalities?.input?.includes("video") ?? false,
-        pdf: model.modalities?.input?.includes("pdf") ?? false,
+        pdf: pdfInput,
       },
       output: {
         text: model.modalities?.output?.includes("text") ?? false,
@@ -1281,6 +1316,10 @@ export const layer = Layer.effect(
               if (model.id && model.id !== modelID) return modelID
               return existingModel?.name ?? modelID
             })
+            const inferredInput = inferredMultimodalInput({ providerID, apiNpm, apiID, modelID, name })
+            const imageInput =
+              model.modalities?.input?.includes("image") ?? existingModel?.capabilities.input.image ?? inferredInput.image
+            const pdfInput = model.modalities?.input?.includes("pdf") ?? existingModel?.capabilities.input.pdf ?? inferredInput.pdf
             const parsedModel: Model = {
               id: ModelID.make(modelID),
               api: {
@@ -1299,9 +1338,9 @@ export const layer = Layer.effect(
                 input: {
                   text: model.modalities?.input?.includes("text") ?? existingModel?.capabilities.input.text ?? true,
                   audio: model.modalities?.input?.includes("audio") ?? existingModel?.capabilities.input.audio ?? false,
-                  image: model.modalities?.input?.includes("image") ?? existingModel?.capabilities.input.image ?? false,
+                  image: imageInput,
                   video: model.modalities?.input?.includes("video") ?? existingModel?.capabilities.input.video ?? false,
-                  pdf: model.modalities?.input?.includes("pdf") ?? existingModel?.capabilities.input.pdf ?? false,
+                  pdf: pdfInput,
                 },
                 output: {
                   text: model.modalities?.output?.includes("text") ?? existingModel?.capabilities.output.text ?? true,

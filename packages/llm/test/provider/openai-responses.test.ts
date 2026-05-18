@@ -45,6 +45,34 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("prepares OpenAI Responses image input", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          messages: [
+            Message.user([
+              { type: "text", text: "Describe this image." },
+              { type: "media", mediaType: "image/png", data: "AAECAw==", filename: "image.png" },
+            ]),
+          ],
+        }),
+      )
+
+      expect(prepared.body).toMatchObject({
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Describe this image." },
+              { type: "input_image", image_url: "data:image/png;base64,AAECAw==" },
+            ],
+          },
+        ],
+      })
+    }),
+  )
+
   it.effect("prepares OpenAI Responses WebSocket target", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
@@ -538,11 +566,11 @@ describe("OpenAI Responses route", () => {
         LLM.request({
           id: "req_media",
           model,
-          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+          messages: [Message.user({ type: "media", mediaType: "application/pdf", data: "AAECAw==" })],
         }),
       ).pipe(Effect.flip)
 
-      expect(error.message).toContain("OpenAI Responses user messages only support text content for now")
+      expect(error.message).toContain("OpenAI Responses does not support media type application/pdf")
     }),
   )
 
