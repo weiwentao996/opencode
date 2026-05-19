@@ -8,6 +8,7 @@ import { InstanceState } from "@/effect/instance-state"
 import type { InstanceContext } from "@/project/instance"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import * as Tool from "./tool"
+import { runLibreOfficeAutomation } from "./office/libreoffice-runner"
 import { runOfficeAutomation, type OfficeOperation } from "./office/powershell"
 import {
   ExcelExportPdfParameters,
@@ -89,7 +90,10 @@ function askMacros(ctx: Tool.Context, filepath: RuntimePath, operation: string, 
 
 function run(operation: OfficeOperation, input: Record<string, unknown>, ctx: Tool.Context) {
   return Effect.tryPromise({
-    try: () => runOfficeAutomation({ operation, ...input }, { abort: ctx.abort }),
+    try: () =>
+      process.platform === "win32"
+        ? runOfficeAutomation({ operation, ...input }, { abort: ctx.abort })
+        : runLibreOfficeAutomation({ operation, ...input }, { abort: ctx.abort }),
     catch: (cause) => cause,
   })
 }
@@ -111,7 +115,7 @@ export const OfficeWordCreateTool = Tool.define(
     const bus = yield* Bus.Service
     return {
       description:
-        "Create a new editable Microsoft Word document on Windows using Microsoft Word automation. Use this instead of raw PowerShell when the output path may contain non-ASCII characters or when a valid .docx/.doc document is required.",
+        "Create a new editable Word document using the best available backend for the current platform.",
       parameters: WordCreateParameters,
       execute: (params: WordCreateInput, ctx: Tool.Context) =>
         Effect.gen(function* () {
@@ -143,7 +147,7 @@ export const OfficeWordInspectTool = Tool.define(
   "office_word_inspect",
   Effect.succeed({
     description:
-      "Inspect a Microsoft Word .doc or .docx document using installed Microsoft Word on Windows. Use this when layout, comments, revisions, tables, or document metadata matter and text conversion would lose fidelity.",
+      "Inspect a Word .doc or .docx document. Uses Microsoft Word automation on Windows; macOS/Linux use OpenXML or LibreOffice text conversion with reduced metadata fidelity.",
     parameters: WordInspectParameters,
     execute: (params: WordInspectInput, ctx: Tool.Context) =>
       Effect.gen(function* () {
@@ -177,7 +181,7 @@ export const OfficeWordExportPdfTool = Tool.define(
     const bus = yield* Bus.Service
     return {
       description:
-        "Export a Word .doc or .docx document to PDF using Microsoft Word's native layout engine on Windows.",
+        "Export a Word .doc or .docx document to PDF. Uses Microsoft Word on Windows and LibreOffice headless on macOS/Linux.",
       parameters: WordExportPdfParameters,
       execute: (params: WordExportPdfInput, ctx: Tool.Context) =>
         Effect.gen(function* () {
@@ -218,7 +222,7 @@ export const OfficeWordReplaceTool = Tool.define(
     const bus = yield* Bus.Service
     return {
       description:
-        "Replace text in a Word .doc or .docx document using Microsoft Word automation while preserving document formatting. Prefer saveAs unless the user explicitly wants in-place edits.",
+        "Replace text in a Word document while preserving formatting where possible. Uses Microsoft Word on Windows; macOS/Linux support direct .docx OpenXML replacement only.",
       parameters: WordReplaceParameters,
       execute: (params: WordReplaceInput, ctx: Tool.Context) =>
         Effect.gen(function* () {
@@ -261,7 +265,7 @@ export const OfficeExcelInspectTool = Tool.define(
   "office_excel_inspect",
   Effect.succeed({
     description:
-      "Inspect an Excel .xls, .xlsx, or .xlsm workbook using installed Microsoft Excel on Windows. Use this for sheet structure, formulas, charts, pivots, named ranges, and workbook metadata.",
+      "Inspect an Excel .xls, .xlsx, or .xlsm workbook. Uses Microsoft Excel on Windows; macOS/Linux support .xlsx/.xlsm OpenXML workbook summaries.",
     parameters: ExcelInspectParameters,
     execute: (params: ExcelInspectInput, ctx: Tool.Context) =>
       Effect.gen(function* () {
@@ -292,7 +296,7 @@ export const OfficeExcelRangeTool = Tool.define(
   "office_excel_range",
   Effect.succeed({
     description:
-      "Read a bounded Excel worksheet range using Microsoft Excel on Windows, including displayed values, raw values, formulas, number formats, and merged-cell information.",
+      "Read a bounded Excel worksheet range. Uses Microsoft Excel on Windows; macOS/Linux support basic .xlsx/.xlsm cell values and formulas via OpenXML.",
     parameters: ExcelRangeParameters,
     execute: (params: ExcelRangeInput, ctx: Tool.Context) =>
       Effect.gen(function* () {
@@ -327,7 +331,7 @@ export const OfficeExcelWriteTool = Tool.define(
     const bus = yield* Bus.Service
     return {
       description:
-        "Write values or formulas into an Excel workbook using Microsoft Excel automation while preserving workbook fidelity. Strings beginning with = are written as formulas. Prefer saveAs unless the user explicitly wants in-place edits.",
+        "Write values or formulas into an Excel workbook using Microsoft Excel automation while preserving workbook fidelity. Strings beginning with = are written as formulas. This operation requires Windows Excel automation.",
       parameters: ExcelWriteParameters,
       execute: (params: ExcelWriteInput, ctx: Tool.Context) =>
         Effect.gen(function* () {
@@ -374,7 +378,7 @@ export const OfficeExcelRecalculateTool = Tool.define(
     const bus = yield* Bus.Service
     return {
       description:
-        "Recalculate an Excel workbook with Microsoft Excel's native calculation engine on Windows. Use this before trusting formula-dependent results.",
+        "Recalculate an Excel workbook with Microsoft Excel's native calculation engine on Windows. This operation requires Windows Excel automation.",
       parameters: ExcelRecalculateParameters,
       execute: (params: ExcelRecalculateInput, ctx: Tool.Context) =>
         Effect.gen(function* () {
@@ -414,7 +418,7 @@ export const OfficeExcelExportPdfTool = Tool.define(
     const bus = yield* Bus.Service
     return {
       description:
-        "Export an Excel workbook or worksheet to PDF using Microsoft Excel's native rendering engine on Windows.",
+        "Export an Excel workbook to PDF. Uses Microsoft Excel on Windows and LibreOffice headless on macOS/Linux; sheet-specific export requires Windows Excel automation.",
       parameters: ExcelExportPdfParameters,
       execute: (params: ExcelExportPdfInput, ctx: Tool.Context) =>
         Effect.gen(function* () {

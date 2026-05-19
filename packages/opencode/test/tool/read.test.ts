@@ -1,4 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
+import { chmod } from "node:fs/promises"
 import { Cause, Effect, Exit, Layer } from "effect"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
@@ -111,6 +112,22 @@ const githubBase = <A, E, R>(url: string, self: Effect.Effect<A, E, R>) =>
         else delete process.env.OPENCODE_REPO_CLONE_GITHUB_BASE_URL
       }),
   )
+const env = <A, E, R>(values: Record<string, string>, self: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]))
+      Object.assign(process.env, values)
+      return previous
+    }),
+    () => self,
+    (previous) =>
+      Effect.sync(() => {
+        for (const [key, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[key]
+          else process.env[key] = value
+        }
+      }),
+  )
 const git = Effect.fn("ReadToolTest.git")(function* (cwd: string, args: string[]) {
   return yield* Effect.promise(async () => {
     const proc = Bun.spawn(["git", ...args], {
@@ -168,6 +185,59 @@ const pdfFixture = (pageCount: number) => {
   pdf += `\ntrailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF\n`
   return Buffer.from(pdf, "ascii")
 }
+const fakeLibreOffice = Effect.fn("ReadToolTest.fakeLibreOffice")(function* (dir: string) {
+  const fs = yield* AppFileSystem.Service
+  const pdf = path.join(dir, "converted.pdf")
+  yield* put(pdf, pdfFixture(1))
+
+  if (process.platform === "win32") {
+    const script = path.join(dir, "soffice.cmd")
+    yield* fs.writeWithDirs(
+      script,
+      [
+        "@echo off",
+        "set outdir=",
+        "set input=",
+        ":loop",
+        "if \"%~1\"==\"\" goto done",
+        "if \"%~1\"==\"--outdir\" (",
+        "  shift",
+        "  set outdir=%~1",
+        ")",
+        "set input=%~1",
+        "shift",
+        "goto loop",
+        ":done",
+        "if not exist \"%outdir%\" mkdir \"%outdir%\"",
+        "for %%F in (\"%input%\") do set name=%%~nF",
+        "copy /Y \"%OPENCODE_FAKE_LIBREOFFICE_PDF%\" \"%outdir%\\%name%.pdf\" >NUL",
+      ].join("\r\n"),
+    )
+    return { script, pdf }
+  }
+
+  const script = path.join(dir, "soffice")
+  yield* fs.writeWithDirs(
+    script,
+    [
+      "#!/bin/sh",
+      "outdir=",
+      "input=",
+      "prev=",
+      "for arg in \"$@\"; do",
+      "  if [ \"$prev\" = \"--outdir\" ]; then outdir=\"$arg\"; fi",
+      "  input=\"$arg\"",
+      "  prev=\"$arg\"",
+      "done",
+      "mkdir -p \"$outdir\"",
+      "base=$(basename \"$input\")",
+      "name=${base%.*}.pdf",
+      "cp \"$OPENCODE_FAKE_LIBREOFFICE_PDF\" \"$outdir/$name\"",
+    ].join("\n"),
+  )
+  yield* Effect.promise(() => chmod(script, 0o755))
+  return { script, pdf }
+})
 const load = Effect.fn("ReadToolTest.load")(function* (p: string) {
   const fs = yield* AppFileSystem.Service
   return yield* fs.readFileString(p)
@@ -598,6 +668,40 @@ describe("tool.read truncation", () => {
 
       const err = yield* fail(dir, { filePath: path.join(dir, "short.pdf"), offset: 2 })
       expect(err.message).toContain("Offset 2 is out of range for this PDF (1 pages)")
+    }),
+  )
+
+  it.live("Office documents convert through LibreOffice before rendering", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const fake = yield* fakeLibreOffice(dir)
+      yield* put(path.join(dir, "report.docx"), Buffer.from("fake office content"))
+
+      const result = yield* env(
+        {
+          OPENCODE_LIBREOFFICE_PATH: fake.script,
+          OPENCODE_FAKE_LIBREOFFICE_PDF: fake.pdf,
+        },
+        exec(dir, { filePath: path.join(dir, "report.docx") }),
+      )
+      expect(result.output).toContain("Office document rendered successfully")
+      expect(result.metadata.truncated).toBe(false)
+      expect(result.attachments?.length).toBe(1)
+      expect(result.attachments?.[0].mime).toBe("image/png")
+      expect(result.attachments?.[0].filename).toBe("report-page-1.png")
+    }),
+  )
+
+  it.live("Office documents fail with a LibreOffice install hint when conversion is unavailable", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      yield* put(path.join(dir, "report.docx"), Buffer.from("fake office content"))
+
+      const err = yield* env(
+        { OPENCODE_LIBREOFFICE_PATH: path.join(dir, "missing-soffice") },
+        fail(dir, { filePath: path.join(dir, "report.docx") }),
+      )
+      expect(err.message).toContain("LibreOffice is required to read Office documents")
     }),
   )
 

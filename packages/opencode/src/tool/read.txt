@@ -13,3 +13,4 @@ Usage:
 - Avoid tiny repeated slices (30 line chunks). If you need more context, read a larger window.
 - This tool can read image files and return them as file attachments.
 - This tool reads PDFs by rendering pages to images for vision analysis; use offset as the start page and limit as the number of pages to render.
+- This tool reads Office documents (.doc, .docx, .xls, .xlsx, .ppt, .pptx, and OpenDocument equivalents) by converting them to PDF with LibreOffice/soffice, then rendering pages to images. LibreOffice must be installed or OPENCODE_LIBREOFFICE_PATH must point to the soffice executable.

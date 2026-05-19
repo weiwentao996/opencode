@@ -4,7 +4,7 @@ export const OfficeFilePath = Schema.String.annotate({ description: "Path to the
 export const OfficeOutputPath = Schema.String.annotate({ description: "Path where the generated document should be written" })
 export const OfficeTimeout = Schema.optional(
   Schema.Int.check(Schema.isGreaterThanOrEqualTo(1_000)).annotate({
-    description: "Optional timeout in milliseconds for Microsoft Office automation",
+    description: "Optional timeout in milliseconds for Office automation",
   }),
 )
 export const AllowMacros = Schema.optional(

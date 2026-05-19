@@ -11,6 +11,7 @@ import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { Reference } from "@/reference/reference"
 import { DEFAULT_PDF_PAGE_LIMIT, MAX_PDF_PAGE_LIMIT, renderPdfPages } from "@/pdf/render"
+import { convertOfficeToPdf, isOfficeDocument } from "./office/libreoffice"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -145,6 +146,47 @@ export const ReadTool = Tool.define(
       )
 
       return { raw, count: flags.count, cut: flags.cut, more: flags.more, offset: opts.offset }
+    })
+
+    const renderPdfFile = Effect.fn("ReadTool.renderPdfFile")(function* (
+      pdfPath: string,
+      sourcePath: string,
+      title: string,
+      loaded: ReadonlyArray<{ filepath: string }>,
+      params: Schema.Schema.Type<typeof Parameters>,
+      label: string,
+    ) {
+      const bytes = yield* fs.readFile(pdfPath)
+      const rendered = yield* renderPdfPages({
+        data: bytes,
+        filename: path.basename(sourcePath),
+        offset: params.offset || 1,
+        limit: params.limit ?? DEFAULT_PDF_PAGE_LIMIT,
+      })
+      const firstPage = rendered.pages[0]!.page
+      const lastPage = rendered.pages[rendered.pages.length - 1]!.page
+      const capped = (params.limit ?? DEFAULT_PDF_PAGE_LIMIT) > MAX_PDF_PAGE_LIMIT
+      const next = rendered.nextOffset ? ` Use offset=${rendered.nextOffset} to continue.` : ""
+      const cap = capped ? ` Requested limit was capped to ${MAX_PDF_PAGE_LIMIT} pages.` : ""
+      const pageRange = firstPage === lastPage ? `page ${firstPage}` : `pages ${firstPage}-${lastPage}`
+      const msg = `${label} rendered successfully. Rendered ${pageRange} of ${rendered.totalPages} as images for vision analysis.${next}${cap}`
+      const basename = path.basename(sourcePath, path.extname(sourcePath))
+
+      return {
+        title,
+        output: msg,
+        metadata: {
+          preview: msg,
+          truncated: rendered.truncated,
+          loaded: loaded.map((item) => item.filepath),
+        },
+        attachments: rendered.pages.map((page) => ({
+          type: "file" as const,
+          mime: page.mime,
+          filename: `${basename}-page-${page.page}.png`,
+          url: `data:${page.mime};base64,${Buffer.from(page.bytes).toString("base64")}`,
+        })),
+      }
     })
 
     const isBinaryFile = (filepath: string, bytes: Uint8Array) => {
@@ -287,37 +329,18 @@ export const ReadTool = Tool.define(
       }
 
       if (isPdfAttachment(mime)) {
-        const bytes = yield* fs.readFile(filepath)
-        const rendered = yield* renderPdfPages({
-          data: bytes,
-          filename: path.basename(filepath),
-          offset: params.offset || 1,
-          limit: params.limit ?? DEFAULT_PDF_PAGE_LIMIT,
-        })
-        const firstPage = rendered.pages[0]!.page
-        const lastPage = rendered.pages[rendered.pages.length - 1]!.page
-        const capped = (params.limit ?? DEFAULT_PDF_PAGE_LIMIT) > MAX_PDF_PAGE_LIMIT
-        const next = rendered.nextOffset ? ` Use offset=${rendered.nextOffset} to continue.` : ""
-        const cap = capped ? ` Requested limit was capped to ${MAX_PDF_PAGE_LIMIT} pages.` : ""
-        const pageRange = firstPage === lastPage ? `page ${firstPage}` : `pages ${firstPage}-${lastPage}`
-        const msg = `PDF rendered successfully. Rendered ${pageRange} of ${rendered.totalPages} as images for vision analysis.${next}${cap}`
-        const basename = path.basename(filepath, path.extname(filepath))
+        return yield* renderPdfFile(filepath, filepath, title, loaded, params, "PDF")
+      }
 
-        return {
-          title,
-          output: msg,
-          metadata: {
-            preview: msg,
-            truncated: rendered.truncated,
-            loaded: loaded.map((item) => item.filepath),
-          },
-          attachments: rendered.pages.map((page) => ({
-            type: "file" as const,
-            mime: page.mime,
-            filename: `${basename}-page-${page.page}.png`,
-            url: `data:${page.mime};base64,${Buffer.from(page.bytes).toString("base64")}`,
-          })),
-        }
+      if (isOfficeDocument(filepath)) {
+        return yield* Effect.acquireUseRelease(
+          Effect.tryPromise({
+            try: () => convertOfficeToPdf(filepath, { abort: ctx.abort }),
+            catch: (cause) => cause,
+          }),
+          (converted) => renderPdfFile(converted.filepath, filepath, title, loaded, params, "Office document"),
+          (converted) => Effect.promise(() => converted.cleanup()).pipe(Effect.ignore),
+        )
       }
 
       if (isBinaryFile(filepath, sample)) {

@@ -134,7 +134,7 @@ export const layer: Layer.Layer<
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
-    const office = process.platform === "win32" ? yield* Effect.all(OfficeTools) : []
+    const office = yield* Effect.all(OfficeTools)
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
